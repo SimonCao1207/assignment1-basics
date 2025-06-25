@@ -1,13 +1,14 @@
-from collections import defaultdict
-import pathlib
-import os
 import cProfile
+import multiprocessing as mp
+import os
+import pathlib
 import pstats
+from collections import defaultdict
 from typing import BinaryIO
 
 import regex as re
+
 from cs336_basics.tokenizer import BPETokenizerParams
-import multiprocessing as mp
 
 DEBUG = os.environ.get("DEBUG") == "1"
 
@@ -142,31 +143,59 @@ class BPETrainer:
             return max(tied_pairs, key=lambda p: (self.vocab[p[0]], self.vocab[p[1]]))
         return tied_pairs[0]
 
-    def merge_pair(self, pair: tuple[int, int]) -> None:
+    def _merge_word(self, old_word: tuple[int, ...], pair: tuple[int, int]) -> tuple[int, ...]:
+        """
+        Merge a byte pair in a word and return the new word.
+        """
+        new_word = []
+        i = 0
+        while i < len(old_word):
+            if i + 1 < len(old_word) and (old_word[i], old_word[i + 1]) == pair:
+                new_word.append(self.next_index)
+                i += 2
+            else:
+                new_word.append(old_word[i])
+                i += 1
+        return tuple(new_word)
+
+    def _remove_pair_contribution(self, old_word: tuple[int, ...], pair: tuple[int, int], freq: int) -> None:
+        for i in range(len(old_word) - 1):
+            pair = (old_word[i], old_word[i + 1])
+            self.pair_counts[pair] -= freq
+            if self.pair_counts[pair] <= 0:
+                del self.pair_counts[pair]
+            if pair in self.pair_to_words:
+                self.pair_to_words[pair].discard(old_word)
+                if not self.pair_to_words[pair]:
+                    del self.pair_to_words[pair]
+
+    def _add_pair_contribution(self, new_word: tuple[int, ...], freq: int) -> None:
+        for i in range(len(new_word) - 1):
+            pair = (new_word[i], new_word[i + 1])
+            self.pair_counts[pair] += freq
+            if pair not in self.pair_to_words:
+                self.pair_to_words[pair] = set()
+            self.pair_to_words[pair].add(new_word)
+
+    def merge_pair(self, old_pair: tuple[int, int]) -> None:
         """
         Merge the most frequent byte pair in the byte sequence frequencies.
         """
-        self.merges[pair] = self.next_index
-        self.vocab[self.next_index] = self.vocab[pair[0]] + self.vocab[pair[1]]
-        new_freqs = defaultdict(int)
-        for byte_seq, count in self.byte_seq_freq.items():
-            new_byte_seq = []
-            i = 0
-            while i < len(byte_seq):
-                if i + 1 < len(byte_seq) and (byte_seq[i], byte_seq[i + 1]) == pair:
-                    new_byte_seq.append(self.next_index)
-                    i += 2
-                else:
-                    new_byte_seq.append(byte_seq[i])
-                    i += 1
-            new_freqs[tuple(new_byte_seq)] += count
+        self.merges[old_pair] = self.next_index
+        self.vocab[self.next_index] = self.vocab[old_pair[0]] + self.vocab[old_pair[1]]
+        affected_words = self.pair_to_words[old_pair]
+        del self.pair_to_words[old_pair]
+        del self.pair_counts[old_pair]
+        for old_word in affected_words:
+            freq = self.byte_seq_freq[old_word]
+            new_word = self._merge_word(old_word, old_pair)
+            self._remove_pair_contribution(old_word, old_pair, freq)
 
-        if DEBUG:
-            print(f"Merge : {self.vocab[pair[0]]} + {self.vocab[pair[1]]} -> {self.vocab[self.next_index]}")
+            del self.byte_seq_freq[old_word]
+            self.byte_seq_freq[new_word] = self.byte_seq_freq.get(new_word, 0) + freq
+
+            self._add_pair_contribution(new_word, self.byte_seq_freq[new_word])
         self.next_index += 1
-
-        self.byte_seq_freq = dict(new_freqs)
-        self.update_pair_structures()
 
     def add_special_token(self, special_tokens: list[str]):
         """
