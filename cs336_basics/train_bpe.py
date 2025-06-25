@@ -161,7 +161,16 @@ def train_bpe(
             break
 
         # Find the most common pair.
-        pair = max(pair_counts.items(), key=lambda x: (x[1], x[0]))[0]
+        max_freq = max(pair_counts.values())
+        tied_pairs = [pair for pair, freq in pair_counts.items() if freq == max_freq]
+
+        if DEBUG and len(tied_pairs) > 1:
+            printable = [
+                f"({vocab[a].decode(errors='ignore')}, {vocab[b].decode(errors='ignore')})" for (a, b) in tied_pairs
+            ]
+            print(f"[Merge {i + 1}] Tie detected among pairs with freq {max_freq}: {printable}")
+
+        pair = max(tied_pairs, key=lambda p: (vocab[p[0]], vocab[p[1]]))  # Prefer lexicographically smaller pair
 
         # Merge that pair.
         merges[pair] = next_index
@@ -170,9 +179,13 @@ def train_bpe(
 
         if DEBUG:
             print(f"Merge {i + 1}: {vocab[pair[0]]} + {vocab[pair[1]]} -> {vocab[next_index]}")
-            print(byte_seq_freq, "\n")
-
         next_index += 1
+
+    if DEBUG:
+        merge_seq = [
+            (vocab[pair[0]].decode(errors="ignore"), vocab[pair[1]].decode(errors="ignore")) for pair in merges.keys()
+        ]
+        print("Sequence of merges:", merge_seq)
 
     return BPETokenizerParams(vocab=vocab, merges=merges, special_tokens=special_tokens)
 
@@ -182,8 +195,6 @@ if __name__ == "__main__":
     input_path = os.path.join("data", "tiny.txt")
     special_tokens = ["<|endoftext|>"]
     params = train_bpe(input_path, num_merges=12, special_tokens=special_tokens)
-    # print("Vocabulary:", params.vocab)
-    print("Merges:", params.merges)
     tokenizer = BPETokenizer(params)
     string = "the quick brown fox"
     indices = tokenizer.encode(string)

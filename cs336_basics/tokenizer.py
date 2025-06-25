@@ -20,6 +20,7 @@ class BPETokenizerParams:
 
     vocab: dict[int, bytes]  # index -> bytes
     merges: dict[tuple[int, int], int]  # index1,index2 -> new_index
+    special_tokens: list[str] | None = None
 
 
 class BPETokenizer(Tokenizer):
@@ -43,8 +44,8 @@ class BPETokenizer(Tokenizer):
 
 def merge(indices: list[int], pair: tuple[int, int], new_index: int) -> list[int]:
     """Return `indices`, but with all instances of `pair` replaced with `new_index`."""
-    new_indices = []  # @inspect new_indices
-    i = 0  # @inspect i
+    new_indices = []
+    i = 0
     while i < len(indices):
         if i + 1 < len(indices) and indices[i] == pair[0] and indices[i + 1] == pair[1]:
             new_indices.append(new_index)
