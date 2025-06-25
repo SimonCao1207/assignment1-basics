@@ -1,10 +1,12 @@
 from collections import defaultdict
 import pathlib
 import os
+import cProfile
+import pstats
 from typing import BinaryIO
 
 import regex as re
-from cs336_basics.tokenizer import BPETokenizer, BPETokenizerParams
+from cs336_basics.tokenizer import BPETokenizerParams
 import multiprocessing as mp
 
 DEBUG = os.environ.get("DEBUG") == "1"
@@ -73,15 +75,6 @@ def read_file_chunks(file_path: str | os.PathLike, num_chunks: int, special_toke
         return chunks
 
 
-def get_pair_counts(freqs: dict[tuple[int, ...], int]) -> dict[tuple[int, int], int]:
-    pair_counts = defaultdict(int)
-    for byte_seq, count in freqs.items():
-        for i in range(len(byte_seq) - 1):
-            pair = (byte_seq[i], byte_seq[i + 1])
-            pair_counts[pair] += count
-    return pair_counts
-
-
 def initial_pretoken_freqs(chunk: str) -> dict[tuple[int, ...], int]:
     """
     Perform regex-based pre-tokenization and return a frequency dictionary
@@ -107,41 +100,88 @@ def merge_dicts(dicts: list[dict[tuple[int, ...], int]]) -> dict[tuple[int, ...]
     return dict(merged_freqs)
 
 
-def merge(
-    byte_seq_freq: dict[tuple[int, ...], int], pair: tuple[int, int], new_index: int
-) -> dict[tuple[int, ...], int]:
+class BPETrainer:
     """
-    Every occurrence of most frequent byte pair in each byte sequence, for example, (“A”, “B”) is merged, i.e.,
-    replaced with a new token “AB”
+    BPE trainer that maintains incremental data structures
     """
-    new_freqs = defaultdict(int)
-    for byte_seq, count in byte_seq_freq.items():
-        new_byte_seq = []
-        i = 0
-        while i < len(byte_seq):
-            if i + 1 < len(byte_seq) and (byte_seq[i], byte_seq[i + 1]) == pair:
-                new_byte_seq.append(new_index)
-                i += 2
-            else:
-                new_byte_seq.append(byte_seq[i])
-                i += 1
-        new_freqs[tuple(new_byte_seq)] += count
-    return new_freqs
+
+    def __init__(self, byte_seq_freq: dict[tuple[int, ...], int]):
+        self.vocab: dict[int, bytes] = {x: bytes([x]) for x in range(256)}  # index -> bytes
+        self.merges: dict[tuple[int, int], int] = {}  # index1, index2 => merged index
+        self.next_index = 256
+        self.byte_seq_freq = byte_seq_freq  # byte sequence -> frequency
+        self.pair_counts: dict[tuple[int, int], int] = defaultdict(int)  # (byte1, byte2) -> frequency
+        self.pair_to_words: dict[tuple[int, int], set[tuple[int, ...]]] = {}  # (byte1, byte2) -> (word1, word2, ...)
+
+    def update_pair_structures(self):
+        """
+        Update pair counts and pair to words structures based on current byte sequence frequencies.
+        """
+        self.pair_counts.clear()
+        self.pair_to_words.clear()
+
+        for byte_seq, count in self.byte_seq_freq.items():
+            for i in range(len(byte_seq) - 1):
+                pair = (byte_seq[i], byte_seq[i + 1])
+                self.pair_counts[pair] += count
+                if pair not in self.pair_to_words:
+                    self.pair_to_words[pair] = set()
+                self.pair_to_words[pair].add(byte_seq)
+
+    def get_most_frequent_pair(self) -> tuple[int, int] | None:
+        """
+        Find the most frequent byte pair in the current pair counts.
+        Returns None if no pairs are found.
+        """
+        if not self.pair_counts:
+            return None
+        max_freq = max(self.pair_counts.values())
+        tied_pairs = [pair for pair, freq in self.pair_counts.items() if freq == max_freq]
+
+        if len(tied_pairs) > 1:
+            return max(tied_pairs, key=lambda p: (self.vocab[p[0]], self.vocab[p[1]]))
+        return tied_pairs[0]
+
+    def merge_pair(self, pair: tuple[int, int]) -> None:
+        """
+        Merge the most frequent byte pair in the byte sequence frequencies.
+        """
+        self.merges[pair] = self.next_index
+        self.vocab[self.next_index] = self.vocab[pair[0]] + self.vocab[pair[1]]
+        new_freqs = defaultdict(int)
+        for byte_seq, count in self.byte_seq_freq.items():
+            new_byte_seq = []
+            i = 0
+            while i < len(byte_seq):
+                if i + 1 < len(byte_seq) and (byte_seq[i], byte_seq[i + 1]) == pair:
+                    new_byte_seq.append(self.next_index)
+                    i += 2
+                else:
+                    new_byte_seq.append(byte_seq[i])
+                    i += 1
+            new_freqs[tuple(new_byte_seq)] += count
+
+        if DEBUG:
+            print(f"Merge : {self.vocab[pair[0]]} + {self.vocab[pair[1]]} -> {self.vocab[self.next_index]}")
+        self.next_index += 1
+
+        self.byte_seq_freq = dict(new_freqs)
+        self.update_pair_structures()
+
+    def add_special_token(self, special_tokens: list[str]):
+        """
+        Add a special token to the vocabulary and return its index.
+        """
+        for tok in special_tokens:
+            tok = tok.encode("utf-8")
+            self.vocab[self.next_index] = tok
+            self.next_index += 1
 
 
 def train_bpe(
     input_path: str | os.PathLike, num_merges: int, special_tokens: list[str] = ["<|endoftext|>"]
 ) -> BPETokenizerParams:
-    merges: dict[tuple[int, int], int] = {}  # index1, index2 => merged index
-    vocab: dict[int, bytes] = {x: bytes([x]) for x in range(256)}  # index -> bytes
-    next_index = 256
-
-    for tok in special_tokens:
-        tok = tok.encode("utf-8")
-        vocab[next_index] = tok
-        next_index += 1
-
-    num_processes = mp.cpu_count()
+    num_processes = 5
 
     chunks = read_file_chunks(input_path, num_chunks=num_processes, special_token=special_tokens[0])
 
@@ -154,49 +194,36 @@ def train_bpe(
         all_freqs = pool.map(initial_pretoken_freqs, clean_spans)
 
     byte_seq_freq = merge_dicts(all_freqs)
+    trainer = BPETrainer(byte_seq_freq)
+    trainer.update_pair_structures()
+    trainer.add_special_token(special_tokens)
 
-    for i in range(num_merges):
-        pair_counts = get_pair_counts(byte_seq_freq)
-        if not pair_counts:
+    for _ in range(num_merges):
+        pair = trainer.get_most_frequent_pair()
+        if pair is None:
             break
-
-        # Find the most common pair.
-        max_freq = max(pair_counts.values())
-        tied_pairs = [pair for pair, freq in pair_counts.items() if freq == max_freq]
-
-        if DEBUG and len(tied_pairs) > 1:
-            printable = [
-                f"({vocab[a].decode(errors='ignore')}, {vocab[b].decode(errors='ignore')})" for (a, b) in tied_pairs
-            ]
-            print(f"[Merge {i + 1}] Tie detected among pairs with freq {max_freq}: {printable}")
-
-        pair = max(tied_pairs, key=lambda p: (vocab[p[0]], vocab[p[1]]))  # Prefer lexicographically smaller pair
-
-        # Merge that pair.
-        merges[pair] = next_index
-        vocab[next_index] = vocab[pair[0]] + vocab[pair[1]]
-        byte_seq_freq = merge(byte_seq_freq, pair, next_index)
-
-        if DEBUG:
-            print(f"Merge {i + 1}: {vocab[pair[0]]} + {vocab[pair[1]]} -> {vocab[next_index]}")
-        next_index += 1
+        trainer.merge_pair(pair)
 
     if DEBUG:
         merge_seq = [
-            (vocab[pair[0]].decode(errors="ignore"), vocab[pair[1]].decode(errors="ignore")) for pair in merges.keys()
+            (trainer.vocab[pair[0]].decode(errors="ignore"), trainer.vocab[pair[1]].decode(errors="ignore"))
+            for pair in trainer.merges.keys()
         ]
+        print("Num processes:", num_processes)
         print("Sequence of merges:", merge_seq)
 
-    return BPETokenizerParams(vocab=vocab, merges=merges, special_tokens=special_tokens)
+    return BPETokenizerParams(vocab=trainer.vocab, merges=trainer.merges, special_tokens=special_tokens)
 
 
 if __name__ == "__main__":
-    # input_path = FIXTURES_PATH / "tinystories_sample_5M.txt"
-    input_path = os.path.join("data", "tiny.txt")
+    input_path = FIXTURES_PATH / "corpus.en"
+    # input_path = os.path.join("data", "tiny.txt")
     special_tokens = ["<|endoftext|>"]
-    params = train_bpe(input_path, num_merges=12, special_tokens=special_tokens)
-    tokenizer = BPETokenizer(params)
-    string = "the quick brown fox"
-    indices = tokenizer.encode(string)
-    reconstructed_string = tokenizer.decode(indices)
-    assert string == reconstructed_string
+    with cProfile.Profile() as pr:
+        params = train_bpe(input_path, num_merges=500, special_tokens=special_tokens)
+
+    stats = pstats.Stats(pr)
+    stats.strip_dirs().sort_stats("cumulative")
+
+    this_file = pathlib.Path(__file__).name
+    stats.print_stats(this_file)
