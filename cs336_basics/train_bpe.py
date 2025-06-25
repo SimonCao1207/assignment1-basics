@@ -1,4 +1,5 @@
 import cProfile
+import functools
 import multiprocessing as mp
 import os
 import pathlib
@@ -76,17 +77,24 @@ def read_file_chunks(file_path: str | os.PathLike, num_chunks: int, special_toke
         return chunks
 
 
-def initial_pretoken_freqs(chunk: str) -> dict[tuple[int, ...], int]:
+def pre_tokenization(chunk: str, special_tokens: list[str]) -> dict[tuple[int, ...], int]:
     """
     Perform regex-based pre-tokenization and return a frequency dictionary
     of each pre-token as a sequence of byte indices.
     """
+
+    # Remove special tokens from chunks before tokenizing
+    pattern = "|".join(re.escape(tok) for tok in special_tokens)
+    cleaned_chunk = re.split(f"({pattern})", chunk)
+    cleaned_spans = [part for part in cleaned_chunk if part and part not in special_tokens]
+
     freqs = defaultdict(int)
-    for match in re.finditer(PAT, chunk):
-        token = match.group(0)
-        token_bytes = token.encode("utf-8")
-        byte_seq = tuple(b for b in token_bytes)
-        freqs[byte_seq] += 1
+    for span in cleaned_spans:
+        for match in re.finditer(PAT, span):
+            token = match.group(0)
+            token_bytes = token.encode("utf-8")
+            byte_seq = tuple(b for b in token_bytes)
+            freqs[byte_seq] += 1
     return freqs
 
 
@@ -216,17 +224,13 @@ class BPETrainer:
 def train_bpe(
     input_path: str | os.PathLike, num_merges: int, special_tokens: list[str] = ["<|endoftext|>"]
 ) -> BPETokenizerParams:
-    num_processes = 5
+    num_processes = mp.cpu_count()
 
     chunks = read_file_chunks(input_path, num_chunks=num_processes, special_token=special_tokens[0])
 
-    # Remove special tokens from chunks before tokenizing
-    pattern = "|".join(re.escape(tok) for tok in special_tokens)
-    cleaned_chunks = [re.split(f"({pattern})", chunk) for chunk in chunks]
-    clean_spans = [part for group in cleaned_chunks for part in group if part and part not in special_tokens]
-
     with mp.Pool(num_processes) as pool:
-        all_freqs = pool.map(initial_pretoken_freqs, clean_spans)
+        func = functools.partial(pre_tokenization, special_tokens=special_tokens)
+        all_freqs = pool.map(func, chunks)
 
     byte_seq_freq = merge_dicts(all_freqs)
     trainer = BPETrainer(byte_seq_freq)
@@ -251,11 +255,12 @@ def train_bpe(
 
 
 if __name__ == "__main__":
-    input_path = FIXTURES_PATH / "corpus.en"
+    dataset = "TinyStoriesV2-GPT4-train"
+    input_path = os.path.join("/data/namcao/cs336", f"{dataset}.txt")
     # input_path = os.path.join("data", "tiny.txt")
     special_tokens = ["<|endoftext|>"]
     with cProfile.Profile() as pr:
-        params = train_bpe(input_path, num_merges=500, special_tokens=special_tokens)
+        params = train_bpe(input_path, num_merges=10000, special_tokens=special_tokens)
 
     stats = pstats.Stats(pr)
     stats.strip_dirs().sort_stats("cumulative")
