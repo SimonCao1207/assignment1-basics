@@ -158,7 +158,10 @@ class BPETrainer:
                 i += 1
         return tuple(new_word)
 
-    def _remove_pair_contribution(self, old_word: tuple[int, ...], pair: tuple[int, int], freq: int) -> None:
+    def _remove_word_contribution(self, old_word: tuple[int, ...], freq: int) -> None:
+        """
+        Remove the contribution of a old word from the pair_counts and pair_to_words structures.
+        """
         for i in range(len(old_word) - 1):
             pair = (old_word[i], old_word[i + 1])
             self.pair_counts[pair] -= freq
@@ -169,7 +172,10 @@ class BPETrainer:
                 if not self.pair_to_words[pair]:
                     del self.pair_to_words[pair]
 
-    def _add_pair_contribution(self, new_word: tuple[int, ...], freq: int) -> None:
+    def _add_word_contribution(self, new_word: tuple[int, ...], freq: int) -> None:
+        """
+        Add the contribution of a new word from the pair_counts and pair_to_words structures.
+        """
         for i in range(len(new_word) - 1):
             pair = (new_word[i], new_word[i + 1])
             self.pair_counts[pair] += freq
@@ -189,12 +195,12 @@ class BPETrainer:
         for old_word in affected_words:
             freq = self.byte_seq_freq[old_word]
             new_word = self._merge_word(old_word, old_pair)
-            self._remove_pair_contribution(old_word, old_pair, freq)
+            self._remove_word_contribution(old_word, freq)
 
             del self.byte_seq_freq[old_word]
             self.byte_seq_freq[new_word] = self.byte_seq_freq.get(new_word, 0) + freq
 
-            self._add_pair_contribution(new_word, self.byte_seq_freq[new_word])
+            self._add_word_contribution(new_word, self.byte_seq_freq[new_word])
         self.next_index += 1
 
     def add_special_token(self, special_tokens: list[str]):
