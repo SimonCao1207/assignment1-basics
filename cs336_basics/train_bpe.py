@@ -116,7 +116,7 @@ class BPETrainer:
 
     def __init__(self, byte_seq_freq: dict[tuple[int, ...], int]):
         self.vocab: dict[int, bytes] = {x: bytes([x]) for x in range(256)}  # index -> bytes
-        self.merges: dict[tuple[int, int], int] = {}  # index1, index2 => merged index
+        self.merges: list[tuple[bytes, bytes]] = []
         self.next_index = 256
         self.byte_seq_freq = byte_seq_freq  # byte sequence -> frequency
         self.pair_counts: dict[tuple[int, int], int] = defaultdict(int)  # (byte1, byte2) -> frequency
@@ -195,7 +195,8 @@ class BPETrainer:
         """
         Merge the most frequent byte pair in the byte sequence frequencies.
         """
-        self.merges[old_pair] = self.next_index
+        old_pair_bytes = (self.vocab[old_pair[0]], self.vocab[old_pair[1]])
+        self.merges.append(old_pair_bytes)
         self.vocab[self.next_index] = self.vocab[old_pair[0]] + self.vocab[old_pair[1]]
         affected_words = self.pair_to_words[old_pair]
         del self.pair_to_words[old_pair]
@@ -244,10 +245,7 @@ def train_bpe(
         trainer.merge_pair(pair)
 
     if DEBUG:
-        merge_seq = [
-            (trainer.vocab[pair[0]].decode(errors="ignore"), trainer.vocab[pair[1]].decode(errors="ignore"))
-            for pair in trainer.merges.keys()
-        ]
+        merge_seq = [(pair[0].decode(errors="ignore"), pair[1].decode(errors="ignore")) for pair in trainer.merges]
         print("Num processes:", num_processes)
         print("Sequence of merges:", merge_seq)
 

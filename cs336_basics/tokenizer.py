@@ -1,6 +1,10 @@
-import re
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
+import regex as re
+
+DEBUG = os.environ.get("DEBUG") == "1"
 
 # Pre-tokenization pattern (used by GPT-2)
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -23,7 +27,7 @@ class BPETokenizerParams:
     """All you need to specify a BPETokenizer."""
 
     vocab: dict[int, bytes]  # index -> bytes
-    merges: dict[tuple[int, int], int]  # index1,index2 -> new_index
+    merges: list[tuple[bytes, bytes]]
     special_tokens: list[str] | None = None
 
 
@@ -49,26 +53,39 @@ class BPETokenizer(Tokenizer):
                 token_bytes = token.encode("utf-8")
                 if token_bytes in self.special_tokens:
                     ret.append([self.inv_vocab[token_bytes]])
-                byte_seq = [self.inv_vocab[bytes(b)] for b in token_bytes]
+                byte_seq = [b for b in token_bytes]
                 ret.append(byte_seq)
         return ret
 
     def encode(self, string: str) -> list[int]:
         token_ids = self.pre_tokenization(string)
 
-        for pair in self.params.merges.keys():
-            merge_index = self.params.merges[pair]
+        for pair in self.params.merges:
+            merge_index = self.inv_vocab[b"".join(pair)]
             for ids in token_ids:
-                for i in range(len(ids) - 1):
+                i = 0
+                while i < len(ids) - 1:
                     if (ids[i], ids[i + 1]) == pair:
                         ids[i : i + 2] = [merge_index]
-                        break
+                    else:
+                        i += 1
         flat_indices = [index for sublist in token_ids for index in sublist]
         return flat_indices
 
     def decode(self, indices: list[int]) -> str:
-        return ""
+        return b"".join([self.params.vocab[idx] for idx in indices]).decode("utf-8", errors="replace")
 
 
 if __name__ == "__main__":
-    pass
+    special_tokens = ["<|endoftext|>"]
+    vocabs = {x: bytes([x]) for x in range(256)}
+    vocabs[256] = special_tokens[0].encode("utf-8")
+    vocabs.update({257: b"st", 258: b"est", 259: b"ow", 260: b"low", 261: b"west", 262: b"ne"})
+    merges = [(b"s", b"t"), (b"e", b"st"), (b"o", b"w"), (b"l", b"ow"), (b"w", b"est"), (b"n", b"e")]
+    params = BPETokenizerParams(vocab=vocabs, merges=merges, special_tokens=special_tokens)
+    tokenizer = BPETokenizer(params)
+    test_string = "This is a test string to tokenize. low and west are examples."
+    encoded = tokenizer.encode(test_string)
+    print(f"Encoded: {encoded}")
+    decoded = tokenizer.decode(encoded)
+    assert decoded == test_string, f"Decoded string does not match original: {decoded} != {test_string}"
