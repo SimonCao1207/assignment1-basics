@@ -132,6 +132,8 @@ class BPETokenizer(Tokenizer):
     def __init__(self, params: BPETokenizerParams):
         self.params = params
         self.special_tokens = params.special_tokens if params.special_tokens is not None else ["<|endoftext|>"]
+        self.special_tokens = sorted(self.special_tokens, key=len, reverse=True)  # longest first
+        self.special_tokens = set(self.special_tokens)  # remove duplicates, O(1) lookup
         self.vocab: dict[int, bytes] = params.vocab  # index -> bytes
         self.inv_vocab: dict[bytes, int] = {v: k for k, v in params.vocab.items()}  # bytes -> index
         self.merge_lookup: dict[tuple[int, int], tuple[int, int]] = {}
@@ -139,14 +141,14 @@ class BPETokenizer(Tokenizer):
             merge_index = self.inv_vocab[b"".join(pair)]
             pair_indices = (self.inv_vocab[pair[0]], self.inv_vocab[pair[1]])
             self.merge_lookup[pair_indices] = (merge_index, i)
+        self._byte_to_token: list[int] = [self.inv_vocab[bytes([b])] for b in range(256)]
 
     def pre_tokenization(self, chunk: str) -> list[list[int]]:
         """
         Perform regex-based pre-tokenization and return a list of pre-token as a sequence of byte indices.
         """
-        sorted_special_tokens = sorted(self.special_tokens, key=len, reverse=True)
 
-        pattern = "|".join(re.escape(tok) for tok in sorted_special_tokens)
+        pattern = "|".join(re.escape(tok) for tok in self.special_tokens)
         split_on_special_tokens = re.split(f"({pattern})", chunk)
         ret = []
         for span in split_on_special_tokens:
@@ -157,8 +159,7 @@ class BPETokenizer(Tokenizer):
             for match in re.finditer(PAT, span):
                 token = match.group(0)
                 token_bytes = token.encode("utf-8")
-                byte_seq = [self.inv_vocab[bytes([b])] for b in token_bytes]
-                ret.append(byte_seq)
+                ret.append([self._byte_to_token[b] for b in token_bytes])
         return ret
 
     def encode(self, string: str) -> list[int]:
@@ -200,123 +201,48 @@ def display_top_memory_consumers(snapshot, key_type="lineno", limit=10):
     print("-" * 80)
 
     for index, stat in enumerate(top_stats[:limit], 1):
-        print(f"#{index}: {stat}")
-        if key_type == "lineno":
-            # Show the actual line of code
-            frame = stat.traceback.format()[0]
-            print(f"    {frame}")
-        print()
+        if "tokenzier.py" in stat.traceback.format()[0]:
+            print(f"#{index}: {stat}")
+            if key_type == "lineno":
+                frame = stat.traceback.format()[0]
+                print(f"    {frame}")
+            print()
 
 
 def profile_memory_detailed(tokenizer, text):
-    """Comprehensive memory profiling with detailed breakdown."""
-    # Start tracing with more detailed tracking
+    """Memory profiling focused on pre-tokenization stage."""
     tracemalloc.start()
-
-    # Take initial snapshot
     snapshot1 = tracemalloc.take_snapshot()
 
     print("=== Memory Profiling Started ===")
-
-    # Profile different stages of encoding
     print("\n1. Pre-tokenization stage...")
+
     pre_tokens = tokenizer.pre_tokenization(text)
     snapshot2 = tracemalloc.take_snapshot()
-
-    print("\n2. BPE merging stage...")
-    result = []
-    for ids in pre_tokens:
-        # Track memory during BPE merging
-        original_ids = ids[:]
-        while True:
-            best_priority = float("inf")
-            best_pos = -1
-            best_merge_index = None
-            for i in range(len(ids) - 1):
-                pair = (ids[i], ids[i + 1])
-                if pair in tokenizer.merge_lookup:
-                    merge_index, priority = tokenizer.merge_lookup[pair]
-                    if priority < best_priority:
-                        best_priority = priority
-                        best_pos = i
-                        best_merge_index = merge_index
-            if not best_merge_index:
-                break
-            ids[best_pos : best_pos + 2] = [best_merge_index]
-        result.extend(ids)
-
-    snapshot3 = tracemalloc.take_snapshot()
-
-    # Get final memory stats
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    # Display results
     print("\n=== Memory Usage Summary ===")
     print(f"Current memory usage: {current / 1024 / 1024:.2f} MB")
     print(f"Peak memory usage: {peak / 1024 / 1024:.2f} MB")
-
-    # Show memory growth by stage
     print("\n=== Memory Growth by Stage ===")
 
-    # Pre-tokenization memory impact
     pre_token_diff = snapshot2.compare_to(snapshot1, "lineno")
     total_pre_token = sum(stat.size_diff for stat in pre_token_diff)
+
     print(f"Pre-tokenization stage: +{total_pre_token / 1024 / 1024:.2f} MB")
 
-    # BPE merging memory impact
-    bpe_diff = snapshot3.compare_to(snapshot2, "lineno")
-    total_bpe = sum(stat.size_diff for stat in bpe_diff)
-    print(f"BPE merging stage: +{total_bpe / 1024 / 1024:.2f} MB")
+    display_top_memory_consumers(snapshot2, "lineno", 15)
+    display_top_memory_consumers(snapshot2, "filename", 10)
 
-    # Show top consumers by line
-    display_top_memory_consumers(snapshot3, "lineno", 15)
-
-    # Show top consumers by filename
-    display_top_memory_consumers(snapshot3, "filename", 10)
-
-    # Show memory growth details
     print("\n=== Detailed Memory Growth (Pre-tokenization) ===")
     for stat in pre_token_diff[:10]:
         if stat.size_diff > 0:
             print(f"+{stat.size_diff / 1024:.1f} KB: {stat}")
-
-    print("\n=== Detailed Memory Growth (BPE Merging) ===")
-    for stat in bpe_diff[:10]:
-        if stat.size_diff > 0:
-            print(f"+{stat.size_diff / 1024:.1f} KB: {stat}")
-
-    return result
-
-
-def profile_encode(tokenizer, text):
-    tracemalloc.start()
-
-    result = tokenizer.encode(text)
-
-    current, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-
-    print(f"Current memory usage: {current / 1024 / 1024:.2f} MB")
-    print(f"Peak memory usage: {peak / 1024 / 1024:.2f} MB")
-
-    return result
+    return pre_tokens
 
 
 if __name__ == "__main__":
-    # special_tokens = ["<|endoftext|>"]
-    # vocabs = {x: bytes([x]) for x in range(256)}
-    # vocabs[256] = special_tokens[0].encode("utf-8")
-    # vocabs.update({257: b"st", 258: b"est", 259: b"ow", 260: b"low", 261: b"west", 262: b"ne"})
-    # merges = [(b"s", b"t"), (b"e", b"st"), (b"o", b"w"), (b"l", b"ow"), (b"w", b"est"), (b"n", b"e")]
-    # params = BPETokenizerParams(vocab=vocabs, merges=merges, special_tokens=special_tokens)
-    # tokenizer = BPETokenizer(params)
-    # test_string = "This is a test string to tokenize. low and west are examples."
-    # encoded = tokenizer.encode(test_string)
-    # print(f"Encoded: {encoded}")
-    # decoded = tokenizer.decode(encoded)
-    # assert decoded == test_string, f"Decoded string does not match original: {decoded} != {test_string}"
-
     tokenizer = get_tokenizer_from_vocab_merges_path(
         vocab_path=VOCAB_PATH,
         merges_path=MERGES_PATH,
@@ -329,7 +255,6 @@ if __name__ == "__main__":
     assert tokenizer.decode(ids) == corpus_contents
     profiler.disable()
     if DEBUG:
-        # Use detailed memory profiling instead of basic profiling
         profile_memory_detailed(tokenizer, corpus_contents)
         stats = pstats.Stats(profiler)
         stats.sort_stats("cumulative")
