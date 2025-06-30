@@ -133,7 +133,6 @@ class BPETokenizer(Tokenizer):
         self.params = params
         self.special_tokens = params.special_tokens if params.special_tokens is not None else ["<|endoftext|>"]
         self.special_tokens = sorted(self.special_tokens, key=len, reverse=True)  # longest first
-        self.special_tokens = set(self.special_tokens)  # remove duplicates, O(1) lookup
         self.vocab: dict[int, bytes] = params.vocab  # index -> bytes
         self.inv_vocab: dict[bytes, int] = {v: k for k, v in params.vocab.items()}  # bytes -> index
         self.merge_lookup: dict[tuple[int, int], tuple[int, int]] = {}
