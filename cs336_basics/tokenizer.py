@@ -152,20 +152,36 @@ class BPETokenizer(Tokenizer):
         split_on_special_tokens = re.split(f"({pattern})", chunk)
         ret = []
         for span in split_on_special_tokens:
+            if not span:
+                continue
             if span in self.special_tokens:
                 ret.append([self.inv_vocab[span.encode("utf-8")]])
                 continue
 
             for match in re.finditer(PAT, span):
-                token = match.group(0)
-                token_bytes = token.encode("utf-8")
+                token_bytes = match.group(0).encode("utf-8")
                 ret.append([self._byte_to_token[b] for b in token_bytes])
         return ret
 
     def encode(self, string: str) -> list[int]:
-        token_ids = self.pre_tokenization(string)
+        # Process in smaller chunks and yield results to avoid holding large lists
+        if len(string) > 10000:
+            return list(self._encode_generator(string, chunk_size=512))
+        else:
+            return self._encode_chunk(string)
+
+    def _encode_generator(self, string: str, chunk_size: int) -> Iterator[int]:
+        for i in range(0, len(string), chunk_size):
+            chunk = string[i : i + chunk_size]
+            yield from self._encode_chunk(chunk)
+
+    def _encode_chunk(self, chunk: str) -> list[int]:
+        token_ids = self.pre_tokenization(chunk)
         result = []
         for ids in token_ids:
+            if len(ids) == 1:
+                result.extend(ids)
+                continue
             while True:
                 best_priority = float("inf")
                 best_pos = -1
@@ -180,9 +196,9 @@ class BPETokenizer(Tokenizer):
                             best_merge_index = merge_index
                 if not best_merge_index:
                     break
-                ids[best_pos : best_pos + 2] = [best_merge_index]
+                ids[best_pos] = best_merge_index
+                ids.pop(best_pos + 1)
             result.extend(ids)
-
         return result
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
