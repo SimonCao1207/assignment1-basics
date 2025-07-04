@@ -9,6 +9,7 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
+from cs336_basics.model import Linear
 from cs336_basics.tokenizer import BPETokenizer, BPETokenizerParams
 from cs336_basics.train_bpe import train_bpe
 
@@ -31,8 +32,15 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
+    lin_layer = Linear(
+        d_in=d_in,
+        d_out=d_out,
+        device=weights.device,
+        dtype=weights.dtype,
+    )
+    lin_layer.weights.data = weights
 
-    raise NotImplementedError
+    return lin_layer(in_features)
 
 
 def run_embedding(
@@ -303,7 +311,7 @@ def run_transformer_lm(
         num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
+        rope_theta (float): The RoPE $Theta$ parameter.
         weights (dict[str, Tensor]):
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
