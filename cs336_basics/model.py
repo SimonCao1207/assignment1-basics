@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange
 from jaxtyping import Float, Int
 from torch import Tensor
 
@@ -56,12 +58,55 @@ class RMSNorm(nn.Module):
 
 class FFN(nn.Module):
     def __init__(self, d_model: int, d_ff: int, device: torch.device | None = None, dtype: torch.dtype | None = None):
+        # NOTE: d_ff should be set to approximately 8/3 × d_model
+        # ensure that d_ff is a multiple of 64 to make good use of hardware.
         super().__init__()
         self.w1 = Linear(d_in=d_model, d_out=d_ff, device=device, dtype=dtype)
         self.w2 = Linear(d_in=d_ff, d_out=d_model, device=device, dtype=dtype)
         self.w3 = Linear(d_in=d_model, d_out=d_ff, device=device, dtype=dtype)
-        self.silu = lambda x: x * torch.nn.functional.sigmoid(x)
+        self.silu = lambda x: x * F.sigmoid(x)
 
     def forward(self, x: Float[Tensor, "... d_model"]) -> Float[Tensor, "... d_model"]:
         # SwiGLU
         return self.w2(self.silu(self.w1(x)) * self.w3(x))
+
+
+class RoPE(nn.Module):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device: torch.device | None = None):
+        assert d_k % 2 == 0, "RoPE dimension must be even"
+        super().__init__()
+        self.theta = theta
+        self.d_k = d_k
+        self.max_seq_len = max_seq_len
+        self.device = device
+
+        half_d = d_k // 2
+        positions: Float[Tensor, " seq_len"] = torch.arange(max_seq_len, device=device, dtype=torch.float32)
+        positions = rearrange(positions, "seq_len -> seq_len 1")
+        dim_index = torch.arange(half_d, device=device, dtype=torch.float32)
+        dim_index = rearrange(dim_index, "half_d -> 1 half_d")
+        angle_rates = 1.0 / (self.theta ** (dim_index / half_d))
+        angles: Float[Tensor, "seq_len half_d"] = positions * angle_rates
+
+        self.cos_cached: Float[Tensor, "max_seq_len half_d"]
+        self.sin_cached: Float[Tensor, "max_seq_len half_d"]
+
+        # Precompute the positional embeddings
+        self.register_buffer("cos_cached", angles.cos(), persistent=False)
+        self.register_buffer("sin_cached", angles.sin(), persistent=False)
+
+    def forward(
+        self, in_query_or_key: Float[Tensor, "... seq_len d_k"], token_positions: Int[Tensor, "... seq_len"]
+    ) -> Float[Tensor, "... seq_len d_k"]:
+        assert in_query_or_key.shape[-1] == self.d_k, "Input last dim must match d_k"
+
+        cos: Float[Tensor, "...seq_len half_d"] = self.cos_cached[token_positions]
+        sin: Float[Tensor, "...seq_len half_d"] = self.sin_cached[token_positions]
+        x1 = in_query_or_key[..., ::2]  # even dim
+        x2 = in_query_or_key[..., 1::2]  # odd dim
+
+        out_even = x1 * cos - x2 * sin
+        out_odd = x1 * sin + x2 * cos
+        out: Float[Tensor, "...seq_len half_d 2"] = torch.stack((out_even, out_odd), dim=-1)
+        out = rearrange(out, "... seq_len half_d two -> ... seq_len (half_d two)", two=2)
+        return out
