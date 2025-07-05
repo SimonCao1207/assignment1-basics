@@ -41,7 +41,6 @@ def test_embedding(numpy_snapshot, ts_state_dict, in_indices, vocab_size, d_mode
     numpy_snapshot.assert_match(output)
 
 
-@pytest.mark.skip(reason="This test is not implemented yet")
 def test_swiglu(numpy_snapshot, ts_state_dict, in_embeddings, d_model, d_ff):
     # reference_weights = torch.load(FIXTURES_PATH / "positionwise_feedforward_weights.pt")
     w1_weight, w2_weight, w3_weight = [ts_state_dict[0][f"layers.0.ffn.{k}.weight"] for k in ["w1", "w2", "w3"]]
