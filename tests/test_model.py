@@ -207,7 +207,6 @@ def test_transformer_block(numpy_snapshot, ts_state_dict, in_embeddings, d_model
     )
 
 
-@pytest.mark.skip(reason="This test is not implemented yet")
 def test_rmsnorm(numpy_snapshot, ts_state_dict, in_embeddings):
     state_dict, _ = ts_state_dict
     reference_weights = state_dict["layers.1.ln1.weight"]
