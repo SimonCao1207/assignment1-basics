@@ -110,3 +110,9 @@ class RoPE(nn.Module):
         out: Float[Tensor, "...seq_len half_d 2"] = torch.stack((out_even, out_odd), dim=-1)
         out = rearrange(out, "... seq_len half_d two -> ... seq_len (half_d two)", two=2)
         return out
+
+
+def softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
+    x = in_features - in_features.amax(dim=dim, keepdim=True)
+    x = x.exp()
+    return x / x.sum(dim=dim, keepdim=True)
