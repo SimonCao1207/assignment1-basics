@@ -9,10 +9,10 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from cs336_basics.model import FFN, SDPA, Embedding, Linear, RMSNorm, RoPE
+from cs336_basics.model import FFN, Embedding, Linear, MultiHeadSelfAttention, RMSNorm, RoPE
 from cs336_basics.tokenizer import BPETokenizer, BPETokenizerParams
 from cs336_basics.train_bpe import train_bpe
-from cs336_basics.utils import softmax
+from cs336_basics.utils import SDPA, softmax
 
 
 def run_linear(
@@ -116,8 +116,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    sdpa = SDPA()
-    return sdpa(Q, K, V, mask)
+    return SDPA(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -151,7 +150,12 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    mhsa = MultiHeadSelfAttention(d_model=d_model, n_heads=num_heads)
+    mhsa.w_q.weight.data = q_proj_weight
+    mhsa.w_k.weight.data = k_proj_weight
+    mhsa.w_v.weight.data = v_proj_weight
+    mhsa.w_o.weight.data = o_proj_weight
+    return mhsa(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -191,7 +195,13 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    rope = RoPE(theta=theta, d_k=d_model // num_heads, max_seq_len=max_seq_len, device=in_features.device)
+    mhsa = MultiHeadSelfAttention(d_model=d_model, n_heads=num_heads)
+    mhsa.w_q.weight.data = q_proj_weight
+    mhsa.w_k.weight.data = k_proj_weight
+    mhsa.w_v.weight.data = v_proj_weight
+    mhsa.w_o.weight.data = o_proj_weight
+    return mhsa(in_features, token_positions, rope)
 
 
 def run_rope(

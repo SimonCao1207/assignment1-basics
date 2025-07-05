@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import einsum, rearrange
+from einops import rearrange
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from cs336_basics.utils import softmax
+from cs336_basics.utils import SDPA
 
 
 class Linear(nn.Module):
@@ -114,21 +114,38 @@ class RoPE(nn.Module):
         return out
 
 
-class SDPA(nn.Module):
-    """Scaled Dot Product Attention module."""
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        self.d_model = d_model
+        self.n_heads = n_heads
+
+        # NOTE: d_k and d_v are the same following Vaswani et al. (2017)
+        self.d_k = self.d_v = d_model // n_heads
+
+        # NOTE: should include device and dtype arguments ?
+        self.w_q = Linear(d_in=d_model, d_out=d_model)
+        self.w_k = Linear(d_in=d_model, d_out=d_model)
+        self.w_v = Linear(d_in=d_model, d_out=d_model)
+        self.w_o = Linear(d_in=d_model, d_out=d_model)
 
     def forward(
         self,
-        query: Float[Tensor, "... q d_k"],
-        key: Float[Tensor, "... k d_k"],
-        value: Float[Tensor, "... k d_v"],
-        mask: Float[Tensor, "... q k"] | None = None,
-    ) -> Float[Tensor, "... q d_v"]:
-        d_k = query.shape[-1]
-        scale = d_k**-0.5
-        scores = einsum(query, key, "... q d_k, ... k d_k -> ... q k") * scale
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, float("-inf"))
-        attn_weights = softmax(scores, dim=-1)
-        weighted_value = einsum(attn_weights, value, "... q k, ... k d_v -> ... q d_v")
-        return weighted_value
+        x: Float[Tensor, "... seq_len d_model"],
+        token_positions: Int[Tensor, "... seq_len"] | None = None,
+        rope: RoPE | None = None,
+    ) -> Float[Tensor, "... seq_len d_model"]:
+        Q = rearrange(self.w_q(x), "... q (h d_k) -> ... h q d_k", h=self.n_heads)
+        K = rearrange(self.w_k(x), "... k (h d_k) -> ... h k d_k", h=self.n_heads)
+        V = rearrange(self.w_v(x), "... v (h d_v) -> ... h v d_v", h=self.n_heads)
+        if rope is not None and token_positions is not None:
+            # Applying RoPE to Q and K but not V
+            Q = rope(Q, token_positions)
+            K = rope(K, token_positions)
+        q, k = Q.shape[-2], K.shape[-2]
+        mask = torch.tril(torch.ones(q, k, device=x.device), diagonal=0)
+        # broadcast to match the batch and head dimensions
+        mask = rearrange(mask, "q k -> 1 1 q k")
+        context: Float[Tensor, "... h s d_v"] = SDPA(query=Q, key=K, value=V, mask=mask)
+        context = rearrange(context, "... h s d_v -> ... s (h d_v)")
+        return self.w_o(context)
