@@ -31,3 +31,5 @@ jobs:
         run: |
           uv run pytest tests/test_train_bpe.py
           uv run pytest tests/test_tokenizer.py
+          uv run pytest tests/test_model.py
+          uv run pytest tests/test_nn_utils.py
