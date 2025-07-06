@@ -16,11 +16,9 @@ class Linear(nn.Module):
                 torch.empty(d_out, d_in, device=device, dtype=dtype), mean=0, std=2 / (d_in + d_out), a=-3, b=3
             )
         )
-        # NOTE: bias can be removed in modern LLM
-        self.bias = nn.Parameter(torch.zeros(d_out, device=device, dtype=dtype))
 
     def forward(self, x: Float[Tensor, "... d_in"]) -> Float[Tensor, "... d_out"]:
-        return x @ self.weight.t() + self.bias
+        return x @ self.weight.t()
 
 
 class Embedding(nn.Module):
@@ -102,20 +100,22 @@ class RoPE(nn.Module):
     ) -> Float[Tensor, "... seq_len d_k"]:
         assert in_query_or_key.shape[-1] == self.d_k, "Input last dim must match d_k"
 
-        cos: Float[Tensor, "...seq_len half_d"] = self.cos_cached[token_positions]
-        sin: Float[Tensor, "...seq_len half_d"] = self.sin_cached[token_positions]
+        cos: Float[Tensor, "... seq_len half_d"] = self.cos_cached[token_positions]
+        sin: Float[Tensor, "... seq_len half_d"] = self.sin_cached[token_positions]
         x1 = in_query_or_key[..., ::2]  # even dim
         x2 = in_query_or_key[..., 1::2]  # odd dim
 
         out_even = x1 * cos - x2 * sin
         out_odd = x1 * sin + x2 * cos
-        out: Float[Tensor, "...seq_len half_d 2"] = torch.stack((out_even, out_odd), dim=-1)
+        out: Float[Tensor, "... seq_len half_d 2"] = torch.stack((out_even, out_odd), dim=-1)
         out = rearrange(out, "... seq_len half_d two -> ... seq_len (half_d two)", two=2)
         return out
 
 
 class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(
+        self, d_model: int, n_heads: int, device: torch.device | None = None, dtype: torch.dtype | None = None
+    ):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
@@ -123,11 +123,10 @@ class MultiHeadSelfAttention(nn.Module):
         # NOTE: d_k and d_v are the same following Vaswani et al. (2017)
         self.d_k = self.d_v = d_model // n_heads
 
-        # NOTE: should include device and dtype arguments ?
-        self.w_q = Linear(d_in=d_model, d_out=d_model)
-        self.w_k = Linear(d_in=d_model, d_out=d_model)
-        self.w_v = Linear(d_in=d_model, d_out=d_model)
-        self.w_o = Linear(d_in=d_model, d_out=d_model)
+        self.q_proj = Linear(d_in=d_model, d_out=d_model, device=device, dtype=dtype)
+        self.k_proj = Linear(d_in=d_model, d_out=d_model, device=device, dtype=dtype)
+        self.v_proj = Linear(d_in=d_model, d_out=d_model, device=device, dtype=dtype)
+        self.output_proj = Linear(d_in=d_model, d_out=d_model, device=device, dtype=dtype)
 
     def forward(
         self,
@@ -135,10 +134,13 @@ class MultiHeadSelfAttention(nn.Module):
         token_positions: Int[Tensor, "... seq_len"] | None = None,
         rope: RoPE | None = None,
     ) -> Float[Tensor, "... seq_len d_model"]:
-        Q = rearrange(self.w_q(x), "... q (h d_k) -> ... h q d_k", h=self.n_heads)
-        K = rearrange(self.w_k(x), "... k (h d_k) -> ... h k d_k", h=self.n_heads)
-        V = rearrange(self.w_v(x), "... v (h d_v) -> ... h v d_v", h=self.n_heads)
-        if rope is not None and token_positions is not None:
+        Q = rearrange(self.q_proj(x), "... q (h d_k) -> ... h q d_k", h=self.n_heads)
+        K = rearrange(self.k_proj(x), "... k (h d_k) -> ... h k d_k", h=self.n_heads)
+        V = rearrange(self.v_proj(x), "... v (h d_v) -> ... h v d_v", h=self.n_heads)
+        if rope is not None:
+            if token_positions is None:
+                seq_len = x.shape[-2]
+                token_positions = torch.arange(0, seq_len, device=x.device, dtype=torch.int32)
             # Applying RoPE to Q and K but not V
             Q = rope(Q, token_positions)
             K = rope(K, token_positions)
@@ -148,4 +150,32 @@ class MultiHeadSelfAttention(nn.Module):
         mask = rearrange(mask, "q k -> 1 1 q k")
         context: Float[Tensor, "... h s d_v"] = SDPA(query=Q, key=K, value=V, mask=mask)
         context = rearrange(context, "... h s d_v -> ... s (h d_v)")
-        return self.w_o(context)
+        return self.output_proj(context)
+
+
+class TransformerBlock(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        d_ff: int,
+        rope_theta: float = 10000.0,
+        max_seq_len: int = 2048,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        super().__init__()
+        self.attn = MultiHeadSelfAttention(d_model=d_model, n_heads=n_heads, device=device, dtype=dtype)
+        self.ffn = FFN(d_model=d_model, d_ff=d_ff, device=device, dtype=dtype)
+        self.ln1 = RMSNorm(d_model=d_model, device=device, dtype=dtype)
+        self.ln2 = RMSNorm(d_model=d_model, device=device, dtype=dtype)
+        self.rope = RoPE(theta=rope_theta, d_k=self.attn.d_k, max_seq_len=max_seq_len, device=device)
+
+    def forward(
+        self,
+        x: Float[Tensor, "... seq_len d_model"],
+        token_positions: Int[Tensor, "... seq_len"] | None = None,
+    ) -> Float[Tensor, "... seq_len d_model"]:
+        x = x + self.attn(self.ln1(x), token_positions=token_positions, rope=self.rope)
+        x = x + self.ffn(self.ln2(x))
+        return x

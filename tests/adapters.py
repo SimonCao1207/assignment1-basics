@@ -9,7 +9,7 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from cs336_basics.model import FFN, Embedding, Linear, MultiHeadSelfAttention, RMSNorm, RoPE
+from cs336_basics.model import FFN, Embedding, Linear, MultiHeadSelfAttention, RMSNorm, RoPE, TransformerBlock
 from cs336_basics.tokenizer import BPETokenizer, BPETokenizerParams
 from cs336_basics.train_bpe import train_bpe
 from cs336_basics.utils import SDPA, softmax
@@ -151,10 +151,10 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     mhsa = MultiHeadSelfAttention(d_model=d_model, n_heads=num_heads)
-    mhsa.w_q.weight.data = q_proj_weight
-    mhsa.w_k.weight.data = k_proj_weight
-    mhsa.w_v.weight.data = v_proj_weight
-    mhsa.w_o.weight.data = o_proj_weight
+    mhsa.q_proj.weight.data = q_proj_weight
+    mhsa.k_proj.weight.data = k_proj_weight
+    mhsa.v_proj.weight.data = v_proj_weight
+    mhsa.output_proj.weight.data = o_proj_weight
     return mhsa(in_features)
 
 
@@ -197,10 +197,10 @@ def run_multihead_self_attention_with_rope(
     """
     rope = RoPE(theta=theta, d_k=d_model // num_heads, max_seq_len=max_seq_len, device=in_features.device)
     mhsa = MultiHeadSelfAttention(d_model=d_model, n_heads=num_heads)
-    mhsa.w_q.weight.data = q_proj_weight
-    mhsa.w_k.weight.data = k_proj_weight
-    mhsa.w_v.weight.data = v_proj_weight
-    mhsa.w_o.weight.data = o_proj_weight
+    mhsa.q_proj.weight.data = q_proj_weight
+    mhsa.k_proj.weight.data = k_proj_weight
+    mhsa.v_proj.weight.data = v_proj_weight
+    mhsa.output_proj.weight.data = o_proj_weight
     return mhsa(in_features, token_positions, rope)
 
 
@@ -297,7 +297,17 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    transformer_block = TransformerBlock(
+        d_model=d_model,
+        n_heads=num_heads,
+        d_ff=d_ff,
+        rope_theta=theta,
+        max_seq_len=max_seq_len,
+        device=in_features.device,
+        dtype=in_features.dtype,
+    )
+    transformer_block.load_state_dict(weights)
+    return transformer_block(in_features)
 
 
 def run_transformer_lm(

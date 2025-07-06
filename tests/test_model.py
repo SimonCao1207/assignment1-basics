@@ -180,7 +180,6 @@ def test_transformer_lm_truncated_input(
     )
 
 
-@pytest.mark.skip(reason="This test is not implemented yet")
 def test_transformer_block(numpy_snapshot, ts_state_dict, in_embeddings, d_model, n_heads, d_ff, n_keys, theta):
     # reference_weights = torch.load(FIXTURES_PATH / "transformer_block_weights.pt")
     # in_features = torch.load(FIXTURES_PATH / "in_features.pt")
