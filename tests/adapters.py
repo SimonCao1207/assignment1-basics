@@ -21,7 +21,7 @@ from cs336_basics.model import (
 )
 from cs336_basics.tokenizer import BPETokenizer, BPETokenizerParams
 from cs336_basics.train_bpe import train_bpe
-from cs336_basics.utils import SDPA, softmax
+from cs336_basics.utils import SDPA, cross_entropy_loss, softmax
 
 
 def run_linear(
@@ -510,7 +510,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy_loss(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:

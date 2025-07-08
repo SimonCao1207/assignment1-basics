@@ -24,7 +24,6 @@ def test_softmax_matches_pytorch():
     )
 
 
-@pytest.mark.skip(reason="This test is not implemented yet")
 def test_cross_entropy():
     inputs = torch.tensor(
         [
