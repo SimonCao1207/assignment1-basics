@@ -1,5 +1,4 @@
 import numpy
-import pytest
 import torch
 
 from .adapters import get_adamw_cls, run_get_lr_cosine_schedule
@@ -50,7 +49,6 @@ def test_adamw(numpy_snapshot):
     )
 
 
-@pytest.mark.skip(reason="This test is not implemented yet")
 def test_get_lr_cosine_schedule():
     max_learning_rate = 1
     min_learning_rate = 1 * 0.1

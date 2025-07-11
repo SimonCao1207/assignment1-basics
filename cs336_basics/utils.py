@@ -1,3 +1,6 @@
+import math
+
+import torch
 from einops import einsum, rearrange
 from jaxtyping import Float
 from torch import Tensor
@@ -84,3 +87,15 @@ class AdamW(Optimizer):
                 p.data.addcdiv_(exp_avg, denom, value=-step_size)
                 if group["weight_decay"] > 0:
                     p.data.add_(p.data, alpha=-group["weight_decay"] * group["lr"])
+
+
+def get_lr_cosine_schedule(it: int, max_lr: float, min_lr: float, warmup_iters: int, cosine_cycle_iters: int) -> float:
+    """Generates a learning rate based on a cosine schedule with warmup."""
+    if it < warmup_iters:
+        return max_lr * (it / warmup_iters)
+    elif it >= warmup_iters and it <= cosine_cycle_iters:
+        return min_lr + 0.5 * (max_lr - min_lr) * (
+            1 + math.cos(torch.pi * (it - warmup_iters) / (cosine_cycle_iters - warmup_iters))
+        )
+    else:
+        return min_lr

@@ -21,7 +21,7 @@ from cs336_basics.model import (
 )
 from cs336_basics.tokenizer import BPETokenizer, BPETokenizerParams
 from cs336_basics.train_bpe import train_bpe
-from cs336_basics.utils import SDPA, AdamW, cross_entropy_loss, softmax
+from cs336_basics.utils import SDPA, AdamW, cross_entropy_loss, get_lr_cosine_schedule, softmax
 
 
 def run_linear(
@@ -557,7 +557,13 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return get_lr_cosine_schedule(
+        it=it,
+        max_lr=max_learning_rate,
+        min_lr=min_learning_rate,
+        warmup_iters=warmup_iters,
+        cosine_cycle_iters=cosine_cycle_iters,
+    )
 
 
 def run_save_checkpoint(
