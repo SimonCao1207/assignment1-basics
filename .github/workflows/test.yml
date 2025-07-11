@@ -35,4 +35,5 @@ jobs:
           uv run pytest tests/test_nn_utils.py
           uv run pytest tests/test_optimizer.py
           uv run pytest tests/test_data.py
+          uv run pytest tests/test_serialization.py
           

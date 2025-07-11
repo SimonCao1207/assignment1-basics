@@ -1,5 +1,7 @@
 import math
+import os
 from collections.abc import Iterable
+from typing import IO, BinaryIO
 
 import numpy.typing as npt
 import torch
@@ -138,6 +140,26 @@ def get_batch(x: npt.NDArray, batch_size: int, context_length: int, device: str)
     targets = torch.stack([x_tensor[i + 1 : i + 1 + context_length] for i in start_indices])
 
     return inputs, targets
+
+
+def save_checkpoint(
+    model: nn.Module, optimizer: Optimizer, iteration: int, out: str | os.PathLike | BinaryIO | IO[bytes]
+) -> None:
+    torch.save(
+        {
+            "iteration": iteration,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+        },
+        out,
+    )
+
+
+def load_checkpoint(src: str | os.PathLike | BinaryIO | IO[bytes], model: nn.Module, optimizer: Optimizer) -> int:
+    checkpoint = torch.load(src, map_location="cpu")
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return checkpoint["iteration"]
 
 
 if __name__ == "__main__":
