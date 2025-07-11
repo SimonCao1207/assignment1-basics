@@ -21,7 +21,15 @@ from cs336_basics.model import (
 )
 from cs336_basics.tokenizer import BPETokenizer, BPETokenizerParams
 from cs336_basics.train_bpe import train_bpe
-from cs336_basics.utils import SDPA, AdamW, cross_entropy_loss, get_lr_cosine_schedule, softmax
+from cs336_basics.utils import (
+    SDPA,
+    AdamW,
+    cross_entropy_loss,
+    get_batch,
+    get_lr_cosine_schedule,
+    gradient_clipping,
+    softmax,
+)
 
 
 def run_linear(
@@ -476,7 +484,7 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    return get_batch(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -522,7 +530,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    return gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> type[torch.optim.Optimizer]:

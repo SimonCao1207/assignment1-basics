@@ -1,6 +1,9 @@
 import math
+from collections.abc import Iterable
 
+import numpy.typing as npt
 import torch
+import torch.nn as nn
 from einops import einsum, rearrange
 from jaxtyping import Float
 from torch import Tensor
@@ -99,3 +102,48 @@ def get_lr_cosine_schedule(it: int, max_lr: float, min_lr: float, warmup_iters: 
         )
     else:
         return min_lr
+
+
+def gradient_clipping(parameters: Iterable[nn.Parameter], max_l2_norm: float) -> None:
+    """
+    Clips the gradients of the parameters to a maximum L2 norm.
+    """
+    grads = [p.grad for p in parameters if p.grad is not None]
+    total_norms = torch.norm(torch.stack([torch.norm(g) for g in grads]), p=2)
+    if total_norms > max_l2_norm:
+        clip_coef = max_l2_norm / (total_norms + 1e-6)
+        for p in parameters:
+            if p.grad is not None:
+                p.grad.data.mul_(clip_coef)
+
+
+def get_batch(x: npt.NDArray, batch_size: int, context_length: int, device: str) -> tuple[Tensor, Tensor]:
+    """
+    x: integer 1-D numpy array with token IDs
+
+    Returns the sampled input sequences and the corresponding next-token targets
+    """
+    assert x.ndim == 1, "x should be a 1-D numpy array"
+    assert x.dtype == int, "x should contain integer token IDs"
+    assert context_length > 0, "context_length must be positive"
+
+    # Ensure the input is a PyTorch tensor
+    x_tensor = torch.tensor(x, dtype=torch.long, device=device)
+
+    # Sample random starting indices for the batches
+    start_indices = torch.randint(0, len(x_tensor) - context_length, (batch_size,), device=device)
+
+    # Create input sequences and targets
+    inputs = torch.stack([x_tensor[i : i + context_length] for i in start_indices])
+    targets = torch.stack([x_tensor[i + 1 : i + 1 + context_length] for i in start_indices])
+
+    return inputs, targets
+
+
+if __name__ == "__main__":
+    tensors = [torch.randn((5, 5)) for _ in range(6)]
+    t1_c = tuple(nn.Parameter(torch.clone(t)) for t in tensors)
+    t1_c[-1].requires_grad_(False)
+    loss_c = torch.cat(t1_c).sum()
+    loss_c.backward()
+    gradient_clipping(t1_c, max_l2_norm=1e-2)
